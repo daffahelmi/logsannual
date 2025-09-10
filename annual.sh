@@ -1,49 +1,34 @@
 #!/bin/bash
 
-# ======================
-# Lokasi script utama
-# ======================
-TARGET_SCRIPT="/usr/local/bin/annual.sh"
-CRON_FILE="/etc/cron.d/annual_job"
-
-# ======================
-# Isi script monitoring
-# ======================
-cat > $TARGET_SCRIPT <<'EOF'
-#!/bin/bash
-
+# === Konfigurasi ===
 TOKEN="7594414570:AAFriZIyAAFwCw0VwMWPYTFKQ-yN0EyvNFM"
 CHAT_ID="7664653146"
+VPS_NAME="NAMAVPS"
 LOG_FILE="/var/log/vnstat_rx_yearly.log"
-VPS_NAME_FILE="/var/log/vps_name.conf"
 
-# Cek dan load VPS_NAME
-if [ -f "$VPS_NAME_FILE" ]; then
-    VPS_NAME=$(cat "$VPS_NAME_FILE")
-    echo "Nama VPS saat ini: $VPS_NAME"
-    read -p "Apakah ingin mengubah nama VPS? (y/n): " confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        read -p "Masukkan nama VPS baru: " VPS_NAME
-        echo "$VPS_NAME" > "$VPS_NAME_FILE"
-    fi
-else
-    read -p "Masukkan nama VPS: " VPS_NAME
-    echo "$VPS_NAME" > "$VPS_NAME_FILE"
-fi
-
+# === Daftar paket yang diperlukan ===
 DEPENDENCIES=("jq" "bc" "curl" "vnstat")
+
+# Fungsi untuk memeriksa dan menginstal paket yang diperlukan
 check_install() {
     local package_name=$1
     if ! command -v $package_name &> /dev/null; then
         echo "$package_name belum terinstal. Menginstal $package_name..."
-        apt update
         apt install -y $package_name
+    else
+        echo "$package_name sudah terinstal."
     fi
 }
+
+# Update apt sekali saja
+apt update -y
+
+# Loop untuk cek semua dependensi
 for package in "${DEPENDENCIES[@]}"; do
     check_install "$package"
 done
 
+# Deteksi interface jaringan
 detect_interface() {
     local interfaces=($(ip -o link show | awk -F': ' '{print $2}' | grep -v lo))
     for intf in "${interfaces[@]}"; do
@@ -56,16 +41,24 @@ detect_interface() {
 }
 
 INTERFACE=$(detect_interface)
+echo "Menggunakan interface: $INTERFACE"
+
+# Mengambil data vnstat
 RX_DATA=$(vnstat -i "$INTERFACE" -y --json 2>/dev/null)
 
+# Cek data vnstat
 if [ -z "$RX_DATA" ]; then
-    ERROR_MSG="[$VPS_NAME] Error: Tidak dapat membaca data vnstat untuk $INTERFACE"
+    ERROR_MSG="[$VPS_NAME] Error: Tidak dapat membaca data vnstat untuk $INTERFACE (vnstat mungkin baru saja diinstal)"
+    echo "$ERROR_MSG"
     curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-        -d chat_id="$CHAT_ID" -d text="$ERROR_MSG"
+        -d chat_id="$CHAT_ID" \
+        -d text="$ERROR_MSG"
     exit 1
 fi
 
 RX_YEARLY=$(echo "$RX_DATA" | jq -r '.interfaces[0].traffic.year[0].rx? // empty')
+
+# Jika data tahunan tidak ada → estimasi dari bulanan
 if [ -z "$RX_YEARLY" ]; then
     RX_MONTHLY=$(echo "$RX_DATA" | jq -r '.interfaces[0].traffic.month[0].rx? // empty')
     if [ -n "$RX_MONTHLY" ]; then
@@ -73,13 +66,18 @@ if [ -z "$RX_YEARLY" ]; then
         NOTE=" (Estimasi tahunan dari data bulanan)"
     else
         ERROR_MSG="[$VPS_NAME] Error: Data bandwidth tidak tersedia"
+        echo "$ERROR_MSG"
         curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-            -d chat_id="$CHAT_ID" -d text="$ERROR_MSG"
+            -d chat_id="$CHAT_ID" \
+            -d text="$ERROR_MSG"
         exit 1
     fi
 fi
 
+# Konversi ke GB
 RX_GB=$(echo "scale=2; $RX_YEARLY / 1024 / 1024 / 1024" | bc)
+
+# Jika lebih dari 1000 GB → tampilkan dalam TB
 if (( $(echo "$RX_GB >= 1000" | bc -l) )); then
     RX_TB=$(echo "scale=2; $RX_GB / 1000" | bc)
     DISPLAY_VALUE="$RX_TB TB$NOTE"
@@ -87,29 +85,12 @@ else
     DISPLAY_VALUE="$RX_GB GB$NOTE"
 fi
 
-MESSAGE="[$VPS_NAME] Penggunaan RX: $DISPLAY_VALUE"
+# Pesan ke Telegram
+MESSAGE="[$VPS_NAME] Penggunaan RX tahun ini ($INTERFACE): $DISPLAY_VALUE"
+
 curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-    -d chat_id="$CHAT_ID" -d text="$MESSAGE"
+    -d chat_id="$CHAT_ID" \
+    -d text="$MESSAGE"
 
+# Simpan log
 echo "$(date): [$VPS_NAME] RX ($INTERFACE) Tahun ini: $DISPLAY_VALUE" >> "$LOG_FILE"
-EOF
-
-# ======================
-# Set permission
-# ======================
-chmod +x $TARGET_SCRIPT
-
-# ======================
-# Tambahkan cron job
-# ======================
-echo "0 */1 * * * root $TARGET_SCRIPT" | tee $CRON_FILE
-chmod 644 $CRON_FILE
-systemctl restart cron
-
-# ======================
-# Jalankan sekali untuk tes
-# ======================
-echo "🚀 Menjalankan script pertama kali untuk test..."
-$TARGET_SCRIPT
-
-echo "✅ Script berhasil dibuat di $TARGET_SCRIPT, cron job ditambahkan, dan notifikasi test dikirim."
