@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# === Konfigurasi ===
+TOKEN="7594414570:AAFriZIyAAFwCw0VwMWPYTFKQ-yN0EyvNFM"
+CHAT_ID="7664653146"
+VPS_NAME="NAMAVPS"
+LOG_FILE="/var/log/vnstat_rx_yearly.log"
+
 # Daftar paket yang diperlukan
 DEPENDENCIES=("jq" "bc" "curl" "vnstat")
 
@@ -91,9 +97,3 @@ curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
 
 # Menyimpan log ke file
 echo "$(date): [$VPS_NAME] RX ($INTERFACE) Tahun ini: $DISPLAY_VALUE" >> "$LOG_FILE"
-
-# Konfigurasi
-TOKEN="7594414570:AAFriZIyAAFwCw0VwMWPYTFKQ-yN0EyvNFM"
-CHAT_ID="7664653146"
-VPS_NAME="NAMAVPS"
-LOG_FILE="/var/log/vnstat_rx_yearly.log" 
